@@ -1,0 +1,12 @@
+.venv/
+checkpoints/
+dataset/
+src/__pycache__/
+src/data/__pycache__/
+src/detection/__pycache__/
+src/models/__pycache__/
+src/training/__pycache__/
+src/visualization/__pycache__/
+src/config/__pycache__/
+src/test.py
+kitti.yaml
