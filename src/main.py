@@ -1,13 +1,15 @@
 import cv2
+import argparse
+import os
 
-from data.video_loader import VideoLoader
-from visualization.draw import draw_boxes
-from models.car_detection import CarDetection
+from src.data.video_loader import VideoLoader
+from src.visualization.draw import draw_boxes
+from src.models.car_detection import CarDetection
 
-def main():
-    video = VideoLoader("path/to/video.mp4")
+def main(video_path, weights_path, device='cpu'):
+    video = VideoLoader(video_path)
 
-    detector = CarDetection()
+    detector = CarDetection(weights_path=weights_path, device=device, conf_thresh=0.5, iou_thresh=0.45)
 
     while True:
         frame = video.read()
@@ -29,4 +31,18 @@ def main():
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Run car detection on a video.')
+    parser.add_argument('video_path', nargs='?', help='Path to the input video file.')
+    parser.add_argument('--video-path', dest='video_path_flag', help='Path to the input video file.')
+    parser.add_argument('--weights', default='checkpoints/best_detector_weights.pth')
+    parser.add_argument('--device', default='cpu')
+    args = parser.parse_args()
+
+    video_path = args.video_path_flag or args.video_path
+    if not video_path:
+        parser.error("the following argument is required: video_path (or --video-path)")
+
+    if not os.path.exists(video_path):
+        parser.error(f"video file not found: {video_path}")
+
+    main(video_path, args.weights, args.device)

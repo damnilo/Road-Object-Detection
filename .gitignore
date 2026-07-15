@@ -10,3 +10,8 @@ src/visualization/__pycache__/
 src/config/__pycache__/
 src/test.py
 kitti.yaml
+logs/
+debug_*.png
+aug_check.png
+video/
+0008/

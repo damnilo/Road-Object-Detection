@@ -4,35 +4,38 @@ from src.detection.bbox import iou, xywh_to_xyxy
 
 def compute_ap(pred_boxes, pred_scores, pred_img_ids, gt_boxes, gt_img_ids, iou_thresh=0.5):
     if len(gt_boxes) == 0:
-        return 1.0 if len(pred_boxes) == 0 else 0.0
+        return float('nan')
     
     if len(pred_boxes) == 0:
         return 0.0
     
+    device = pred_boxes.device
+    gt_boxes = gt_boxes.to(device)
+    gt_img_ids = gt_img_ids.to(device)
     order = pred_scores.argsort(descending=True)
     pred_boxes = pred_boxes[order]
     pred_img_ids = pred_img_ids[order]
 
-    matched = torch.zeros(len(gt_boxes), dtype=torch.bool)
-    tp = torch.zeros(len(pred_boxes), dtype=torch.float)
-    fp = torch.zeros(len(pred_boxes), dtype=torch.float)
+    matched = torch.zeros(len(gt_boxes), dtype=torch.bool, device=pred_boxes.device)
+    tp = torch.zeros(len(pred_boxes), dtype=torch.float32, device=pred_boxes.device)
+    fp = torch.zeros(len(pred_boxes), dtype=torch.float32, device=pred_boxes.device)
 
     for i in range(len(pred_boxes)):
         same_img = (gt_img_ids == pred_img_ids[i]).nonzero(as_tuple=True)[0]
 
         if len(same_img) == 0:
-            fp[i] = 1
+            fp[i] = 1.0
             continue
 
         ious = iou(pred_boxes[i:i+1], gt_boxes[same_img]).squeeze(0)
-        best_iou, best_gt_idx = ious.max(0)
-        best_gt_idx = same_img[best_gt_idx]
+        best_iou, best_idx = ious.max(0)
+        best_gt_idx = same_img[best_idx]
 
         if best_iou >= iou_thresh and not matched[best_gt_idx]:
-            tp[i] = 1
+            tp[i] = 1.0
             matched[best_gt_idx] = True
         else:
-            fp[i] = 1
+            fp[i] = 1.0
 
     tp_cum = torch.cumsum(tp, dim=0)
     fp_cum = torch.cumsum(fp, dim=0)
@@ -40,21 +43,24 @@ def compute_ap(pred_boxes, pred_scores, pred_img_ids, gt_boxes, gt_img_ids, iou_
     recall = tp_cum / len(gt_boxes)
     precision = tp_cum / (tp_cum + fp_cum).clamp(min=1e-6)
 
-    ap = 0.0
+    recall = torch.cat([recall.new_tensor([0.0]), recall, recall.new_tensor([1.0])])
+    precision = torch.cat([precision.new_tensor([1.0]), precision, precision.new_tensor([0.0])])
 
-    for t in torch.linspace(0, 1, steps=11):
-        mask = recall >= t
-        p = precision[mask].max() if mask.any() else torch.tensor(0.0)
-        ap += p / 11.0
+    for i in range(len(precision) - 2, -1, -1):
+        precision[i] = torch.max(precision[i], precision[i + 1])
 
-    return ap.item()
+    idx = (recall[1:] != recall[:-1]).nonzero(as_tuple=True)[0]
+    ap = torch.sum((recall[idx + 1] - recall[idx]) * precision[idx + 1]).item()
+
+    return ap
 
 @torch.no_grad()
 def evaluate(model, dataloader, grid_size, num_classes, device="cpu",
-             conf_thresh=0.5, nms_iou_thresh=0.45, ap_iou_thresh=0.5):
+             conf_thresh=0.001, nms_iou_thresh=0.45, ap_iou_thresh=0.5):
     
     from src.detection.bbox import decode_predictions, nms
 
+    was_training = model.training
     model.eval()
 
     pred_boxes_by_cls = {c: [] for c in range(num_classes)}
@@ -84,9 +90,10 @@ def evaluate(model, dataloader, grid_size, num_classes, device="cpu",
                 for c in range(num_classes):
                     cls_mask = labels == c
                     if cls_mask.any():
-                        pred_boxes_by_cls[c].append(boxes_xyxy[cls_mask])
-                        pred_scores_by_cls[c].append(scores[cls_mask])
-                        pred_img_ids_by_cls[c].append(torch.full((cls_mask.sum(),), img_id, dtype=torch.long))
+                        num_predictions = cls_mask.sum().item()
+                        pred_boxes_by_cls[c].append(boxes_xyxy[cls_mask].cpu())
+                        pred_scores_by_cls[c].append(scores[cls_mask].cpu())
+                        pred_img_ids_by_cls[c].append(torch.full((num_predictions,), img_id, dtype=torch.long))
 
             gt_boxes = raw_boxes_batch[b]
             gt_labels = raw_label_batch[b]
@@ -112,6 +119,7 @@ def evaluate(model, dataloader, grid_size, num_classes, device="cpu",
 
         aps[c] = compute_ap(pb, ps, pid, gb, gid, iou_thresh=ap_iou_thresh)
     
-    mean_ap = sum(aps.values()) / len(aps) if aps else 0.0
-    model.train()
+    valid_aps = [ap for ap in aps.values() if ap == ap]
+    mean_ap = sum(valid_aps) / len(valid_aps) if valid_aps else 0.0
+    model.train(was_training)
     return mean_ap, aps

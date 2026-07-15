@@ -39,7 +39,7 @@ def nms(boxes_xyxy, scores, class_ids, iou_threshold=0.45):
         cls_boxes, cls_scores, cls_mask = cls_boxes[order], cls_scores[order], cls_mask[order]
 
         picked = []
-        active = torch.ones(cls_boxes.size(0), dtype=torch.bool)
+        active = torch.ones(cls_boxes.size(0), dtype=torch.bool, device=cls_boxes.device)
 
         for i in range(cls_boxes.size(0)):
             if not active[i]:
@@ -55,27 +55,41 @@ def nms(boxes_xyxy, scores, class_ids, iou_threshold=0.45):
 
         keep.extend(picked)
 
-    return torch.tensor(keep, dtype=torch.long)
+    if not keep:
+        return torch.empty(0, dtype=torch.long, device=boxes_xyxy.device)
+
+    keep = torch.tensor(keep, dtype=torch.long, device=boxes_xyxy.device)
+    return keep[scores[keep].argsort(descending=True)]
     
-def encode_targets(gt_boxes, gt_labels, grid_size, num_classes):
+def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1):
     S = grid_size
-    targets = torch.zeros((S, S, 5 + num_classes))
+    targets = torch.zeros((S, S, boxes_per_cell, 5 + num_classes))
 
     for (cx, cy, w, h), label in zip(gt_boxes, gt_labels):
+        if not (0 <= label < num_classes and w > 0 and h > 0):
+            continue
+        cx, cy = min(max(cx, 0.0), 1.0 - 1e-6), min(max(cy, 0.0), 1.0 - 1e-6)
+        w, h = min(max(w, 0.0), 1.0), min(max(h, 0.0), 1.0)
         i, j = int(cx * S), int(cy * S)
         i, j = min(i, S - 1), min(j, S - 1)
 
-        if targets[j, i, 0] == 1:
-            continue
+        occupied = targets[j, i, :, 0].bool()
+        if (~occupied).any():
+            slot = (~occupied).nonzero(as_tuple=True)[0][0].item()
+        else:
+            existing_areas = targets[j, i, :, 3].square() * targets[j, i, :, 4].square()
+            slot = existing_areas.argmin().item()
+            if w * h <= existing_areas[slot].item():
+                continue
 
         tx, ty = cx * S - i, cy * S - j
 
-        targets[j, i, 0] = 1.0
-        targets[j, i, 1] = tx
-        targets[j, i, 2] = ty
-        targets[j, i, 3] = w ** 0.5
-        targets[j, i, 4] = h ** 0.5
-        targets[j, i, 5 + label] = 1.0
+        targets[j, i, slot, 0] = 1.0
+        targets[j, i, slot, 1] = tx
+        targets[j, i, slot, 2] = ty
+        targets[j, i, slot, 3] = w ** 0.5
+        targets[j, i, slot, 4] = h ** 0.5
+        targets[j, i, slot, 5 + label] = 1.0
 
     return targets
     
@@ -84,20 +98,27 @@ def decode_predictions(pred, grid_size, num_classes, conf_threshold=0.5):
     device = pred.device
 
     obj = pred[..., 0]
-    mask = obj > conf_threshold
+    class_scores, class_ids = pred[..., 5:5 + num_classes].max(dim=-1)
+    scores = obj * class_scores
+    mask = scores > conf_threshold
 
     if mask.sum() == 0:
         return (torch.empty(0, 4, device=device),
                 torch.empty(0, device=device),
                 torch.empty(0, dtype=torch.long, device=device))
         
-    jj, ii = mask.nonzero(as_tuple=True)
+    if pred.dim() == 3:
+        pred = pred.unsqueeze(2)
+        scores = scores.unsqueeze(2)
+        class_ids = class_ids.unsqueeze(2)
+        mask = mask.unsqueeze(2)
 
-    tx = pred[jj, ii, 1]
-    ty = pred[jj, ii, 2]
-    sqrt_w = pred[jj, ii, 3]
-    sqrt_h = pred[jj, ii, 4]
-    class_probs = pred[jj, ii, 5:5+num_classes]
+    jj, ii, box_idx = mask.nonzero(as_tuple=True)
+
+    tx = pred[jj, ii, box_idx, 1]
+    ty = pred[jj, ii, box_idx, 2]
+    sqrt_w = pred[jj, ii, box_idx, 3]
+    sqrt_h = pred[jj, ii, box_idx, 4]
 
     cx = (ii.float() + tx) / S
     cy = (jj.float() + ty) / S
@@ -105,9 +126,8 @@ def decode_predictions(pred, grid_size, num_classes, conf_threshold=0.5):
     h = sqrt_h ** 2
 
     boxes = torch.stack([cx, cy, w, h], dim=1)
-    boxes_xyxy = xywh_to_xyxy(boxes)
-
-    class_scores, class_ids = class_probs.max(dim=1)
-    scores = obj[jj, ii] * class_scores
+    boxes_xyxy = xywh_to_xyxy(boxes).clamp(0.0, 1.0)
+    scores = scores[jj, ii, box_idx]
+    class_ids = class_ids[jj, ii, box_idx]
 
     return boxes_xyxy, scores, class_ids

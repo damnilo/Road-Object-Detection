@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from src.config.configs import NUM_CLASSES
 
@@ -11,7 +12,12 @@ class DetectionLoss(nn.Module):
         self.lambda_noobj = lambda_noobj
 
         self.mse = nn.MSELoss(reduction='sum')
-        counts = torch.tensor(class_counts, dtype=torch.float32)
+        if class_counts is None:
+            counts = torch.ones(num_classes, dtype=torch.float32)
+        else:
+            counts = torch.as_tensor(class_counts, dtype=torch.float32)
+            if counts.numel() != num_classes or torch.any(counts <= 0):
+                raise ValueError("class_counts must contain one positive count per class")
         weights = counts.sum() / (len(counts) * counts)
         weights = weights.clamp(max=5.0)
         weights = weights / weights.mean()
@@ -21,16 +27,26 @@ class DetectionLoss(nn.Module):
         obj_mask = target[..., 0] == 1
         noobj_mask = target[..., 0] == 0
 
-        coord_loss = self.mse(pred[obj_mask][..., 1:5], target[obj_mask][..., 1:5])
+        if obj_mask.any():
+            coord_loss = self.mse(pred[obj_mask][..., 1:5], target[obj_mask][..., 1:5])
+        else:
+            coord_loss = pred.new_zeros(())
 
-        obj_loss = nn.functional.binary_cross_entropy(pred[obj_mask][..., 0], target[obj_mask][..., 0], reduction='sum')
-        noobj_loss = nn.functional.binary_cross_entropy(pred[noobj_mask][..., 0], target[noobj_mask][..., 0], reduction='sum')
+        obj_loss = F.binary_cross_entropy(pred[obj_mask][..., 0], target[obj_mask][..., 0], reduction='sum')
+        noobj_loss = F.binary_cross_entropy(pred[noobj_mask][..., 0], target[noobj_mask][..., 0], reduction='sum')
 
         pred_cls = pred[obj_mask][..., 5:]
         target_cls = target[obj_mask][..., 5:]
-        per_elem_bce = nn.functional.binary_cross_entropy(pred_cls, target_cls, reduction='none')
-        weighted_bce = per_elem_bce * self.class_weights.unsqueeze(0)
-        class_loss = weighted_bce.sum()
+        if pred_cls.numel() == 0:
+            class_loss = pred.new_zeros(())
+        else:
+            target_class_ids = target_cls.argmax(dim=-1)
+            class_loss = F.nll_loss(
+                pred_cls.clamp_min(1e-8).log(),
+                target_class_ids,
+                weight=self.class_weights,
+                reduction='sum',
+            )
 
         batch_size = pred.size(0)
         total = (self.lambda_coord * coord_loss + obj_loss
