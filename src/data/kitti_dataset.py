@@ -3,8 +3,9 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 
-from src.config.configs import BOXES_PER_CELL, CLASS_TO_IDX, GRID_SIZE, IMG_SIZE, NUM_CLASSES
-from src.detection.bbox import encode_targets
+from src.config.configs import (BOXES_PER_CELL, CLASS_TO_IDX, FINE_GRID_SIZE, GRID_SIZE,
+                                IMG_SIZE, NUM_CLASSES, SMALL_OBJECT_AREA)
+from src.detection.bbox import encode_multiscale_targets
 from src.data.transform import letterbox_boxes, letterbox_image, random_augment
 
 class KITTIDataset(Dataset):
@@ -107,15 +108,19 @@ class KITTIDataset(Dataset):
         if self.augment:
             image, boxes_tensor, labels_tensor = random_augment(image, boxes_tensor, labels_tensor, debug=self.debug)
 
-        target = encode_targets(
-            boxes_tensor.tolist(), labels_tensor.tolist(), GRID_SIZE, NUM_CLASSES, BOXES_PER_CELL
+        target = encode_multiscale_targets(
+            boxes_tensor.tolist(), labels_tensor.tolist(), GRID_SIZE, FINE_GRID_SIZE,
+            NUM_CLASSES, BOXES_PER_CELL, IMG_SIZE, SMALL_OBJECT_AREA,
         )
 
         return image, target, boxes_tensor, labels_tensor
 
     def detection_collate(batch):
         images = torch.stack([item[0] for item in batch], dim=0)
-        targets = torch.stack([item[1] for item in batch], dim=0)
+        targets = {
+            scale: torch.stack([item[1][scale] for item in batch], dim=0)
+            for scale in ('fine', 'coarse')
+        }
 
         raw_boxes = [item[2] for item in batch]
         raw_labels = [item[3] for item in batch]

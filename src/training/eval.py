@@ -55,10 +55,10 @@ def compute_ap(pred_boxes, pred_scores, pred_img_ids, gt_boxes, gt_img_ids, iou_
     return ap
 
 @torch.no_grad()
-def evaluate(model, dataloader, grid_size, num_classes, device="cpu",
+def evaluate(model, dataloader, grid_sizes, num_classes, device="cpu",
              conf_thresh=0.001, nms_iou_thresh=0.45, ap_iou_thresh=0.5):
     
-    from src.detection.bbox import decode_predictions, nms
+    from src.detection.bbox import decode_multiscale_predictions, nms
 
     was_training = model.training
     model.eval()
@@ -77,8 +77,9 @@ def evaluate(model, dataloader, grid_size, num_classes, device="cpu",
         preds = model(images)
 
         for b in range(images.size(0)):
-            boxes_xyxy, scores, labels = decode_predictions(
-                preds[b], grid_size, num_classes, conf_threshold=conf_thresh
+            boxes_xyxy, scores, labels = decode_multiscale_predictions(
+                {scale: pred[b] for scale, pred in preds.items()}, grid_sizes,
+                num_classes, conf_threshold=conf_thresh
             )
 
             if boxes_xyxy.size(0) > 0:

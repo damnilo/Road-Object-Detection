@@ -27,6 +27,31 @@ def iou(boxes1, boxes2):
     union = area1 + area2 - inter
     return inter / union.clamp(min=1e-6)
     
+def agnostic_nms(boxes_xyxy, scores, iou_threshold=0.45):
+    if boxes_xyxy.size(0) == 0:
+        return torch.empty(0, dtype=torch.long, device=boxes_xyxy.device)
+
+    order = scores.argsort(descending=True)
+    boxes_xyxy = boxes_xyxy[order]
+
+    keep = []
+    active = torch.ones(boxes_xyxy.size(0), dtype=torch.bool, device=boxes_xyxy.device)
+
+    for i in range(boxes_xyxy.size(0)):
+        if not active[i]:
+            continue
+
+        keep.append(order[i].item())
+
+        if i + 1 > boxes_xyxy.size(0) - 1:
+            break
+
+        ious = iou(boxes_xyxy[i:i+1], boxes_xyxy[i + 1:])
+        suppress = (ious > iou_threshold).nonzero(as_tuple=True)[0] + (i+1)
+        active[suppress] = False
+
+    return torch.tensor(keep, dtype=torch.long, device=boxes_xyxy.device)
+
 def nms(boxes_xyxy, scores, class_ids, iou_threshold=0.45):
     keep = []
 
@@ -92,6 +117,69 @@ def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1
         targets[j, i, slot, 5 + label] = 1.0
 
     return targets
+
+
+def encode_multiscale_targets(gt_boxes, gt_labels, coarse_grid_size, fine_grid_size,
+                              num_classes, boxes_per_cell=1, image_size=416,
+                              small_object_area=32 * 32):
+    """Assign every ground-truth box to exactly one detection scale."""
+    fine_boxes, fine_labels = [], []
+    coarse_boxes, coarse_labels = [], []
+
+    for box, label in zip(gt_boxes, gt_labels):
+        _, _, w, h = box
+        if (w * image_size) * (h * image_size) < small_object_area:
+            fine_boxes.append(box)
+            fine_labels.append(label)
+        else:
+            coarse_boxes.append(box)
+            coarse_labels.append(label)
+
+    return {
+        "fine": encode_targets(fine_boxes, fine_labels, fine_grid_size, num_classes, boxes_per_cell),
+        "coarse": encode_targets(coarse_boxes, coarse_labels, coarse_grid_size, num_classes, boxes_per_cell),
+    }
+
+def decode_targets(target, num_classes=None):
+    if target.dim() != 4:
+        raise ValueError('target must have shape (S, S, B, 5 + num_classes)')
+
+    S = target.size(0)
+    boxes = []
+    labels = []
+    cells = []
+
+    if num_classes is None:
+        num_classes = target.size(-1) - 5
+
+    for j in range(S):
+        for i in range(S):
+            for box_idx in range(target.size(2)):
+                cell = target[j, i, box_idx]
+                if cell[0].item() <= 0:
+                    continue
+
+                tx, ty, sqrt_w, sqrt_h = cell[1:5]
+                class_slice = cell[5:5 + num_classes]
+
+                cx = (i + tx.item()) / S
+                cy = (j + ty.item()) / S
+                w = float(sqrt_w.item()) ** 2
+                h = float(sqrt_h.item()) ** 2
+                label = int(class_slice.argmax().item()) if class_slice.numel() > 0 else -1
+
+                boxes.append([cx, cy, w, h])
+                labels.append(label)
+                cells.append((j, i, box_idx))
+
+    if boxes:
+        boxes = torch.tensor(boxes, dtype=target.dtype, device=target.device)
+        labels = torch.tensor(labels, dtype=torch.long, device=target.device)
+    else:
+        boxes = target.new_zeros((0, 4))
+        labels = torch.empty((0,), dtype=torch.long, device=target.device)
+
+    return boxes, labels, cells
     
 def decode_predictions(pred, grid_size, num_classes, conf_threshold=0.5):
     S = grid_size
@@ -131,3 +219,23 @@ def decode_predictions(pred, grid_size, num_classes, conf_threshold=0.5):
     class_ids = class_ids[jj, ii, box_idx]
 
     return boxes_xyxy, scores, class_ids
+
+
+def decode_multiscale_predictions(predictions, grid_sizes, num_classes, conf_threshold=0.5):
+    """Decode all heads into one normalized-coordinate prediction set."""
+    boxes, scores, labels = [], [], []
+    for scale_name, pred in predictions.items():
+        scale_boxes, scale_scores, scale_labels = decode_predictions(
+            pred, grid_sizes[scale_name], num_classes, conf_threshold
+        )
+        if scale_boxes.numel() > 0:
+            boxes.append(scale_boxes)
+            scores.append(scale_scores)
+            labels.append(scale_labels)
+
+    if boxes:
+        return torch.cat(boxes), torch.cat(scores), torch.cat(labels)
+
+    device = next(iter(predictions.values())).device
+    return (torch.empty(0, 4, device=device), torch.empty(0, device=device),
+            torch.empty(0, dtype=torch.long, device=device))

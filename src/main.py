@@ -9,7 +9,7 @@ from src.models.car_detection import CarDetection
 def main(video_path, weights_path, device='cpu'):
     video = VideoLoader(video_path)
 
-    detector = CarDetection(weights_path=weights_path, device=device, conf_thresh=0.5, iou_thresh=0.45)
+    detector = CarDetection(weights_path=weights_path, device=device, conf_thresh=0.40, iou_thresh=0.45)
 
     while True:
         frame = video.read()

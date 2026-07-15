@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from src.config.configs import NUM_CLASSES
 
 class DetectionLoss(nn.Module):
-    def __init__(self, num_classes=NUM_CLASSES, class_counts=None, lambda_coord=5, lambda_noobj=0.5):
+    def __init__(self, num_classes=NUM_CLASSES, class_counts=None, lambda_coord=5, lambda_noobj=0.25):
         super().__init__()
         self.num_classes = num_classes
         self.lambda_coord = lambda_coord
@@ -23,7 +23,7 @@ class DetectionLoss(nn.Module):
         weights = weights / weights.mean()
         self.register_buffer("class_weights", weights)
 
-    def forward(self, pred, target):
+    def _single_scale_loss(self, pred, target):
         obj_mask = target[..., 0] == 1
         noobj_mask = target[..., 0] == 0
 
@@ -58,3 +58,16 @@ class DetectionLoss(nn.Module):
             "noobj": noobj_loss.item() / batch_size,
             "class": class_loss.item() / batch_size
         }
+
+    def forward(self, predictions, targets):
+        if not isinstance(predictions, dict) or not isinstance(targets, dict):
+            raise TypeError("DetectionLoss expects dictionaries of fine and coarse predictions/targets")
+
+        total = None
+        stats = {"coord": 0.0, "obj": 0.0, "noobj": 0.0, "class": 0.0}
+        for scale in ("fine", "coarse"):
+            scale_loss, scale_stats = self._single_scale_loss(predictions[scale], targets[scale])
+            total = scale_loss if total is None else total + scale_loss
+            for key in stats:
+                stats[key] += scale_stats[key]
+        return total, stats
