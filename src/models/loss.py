@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from src.config.configs import NUM_CLASSES
 
 class DetectionLoss(nn.Module):
-    def __init__(self, num_classes=NUM_CLASSES, class_counts=None, lambda_coord=5, lambda_noobj=0.25):
+    def __init__(self, num_classes=NUM_CLASSES, class_counts=None, lambda_coord=5, lambda_noobj=0.1):
         super().__init__()
         self.num_classes = num_classes
         self.lambda_coord = lambda_coord

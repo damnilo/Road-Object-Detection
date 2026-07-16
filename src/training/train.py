@@ -98,8 +98,8 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
     model = Detector(num_classes=NUM_CLASSES).to(device)
     model = maybe_compile_model(model)
     criterion = DetectionLoss(num_classes=NUM_CLASSES, class_counts=class_counts).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.003, weight_decay=5e-5)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=12, gamma=0.5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
     best_map = float('-inf')
     start_epoch = 0
     log_path = log_file or 'logs/training_log.csv'
@@ -184,7 +184,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train the grid-based object detector.')
-    parser.add_argument('--epochs', type=int, default=25)
+    parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--batch-size', type=int, default=4)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--resume', help='Path to a checkpoints/latest.pth file to resume.')

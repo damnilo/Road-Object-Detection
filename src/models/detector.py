@@ -24,8 +24,12 @@ class Detector(nn.Module):
         self.block5 = conv_block(256, 512)
 
         output_channels = boxes_per_cell * (5 + num_classes)
-        self.fine_dropout = nn.Dropout2d(0.2)
-        self.coarse_dropout = nn.Dropout2d(0.2)
+        self.fine_lateral = nn.Conv2d(512, 256, kernel_size=1)
+        self.fine_refine = nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
         self.fine_head = nn.Conv2d(256, output_channels, kernel_size=1)
         self.coarse_head = nn.Conv2d(512, output_channels, kernel_size=1)
 
@@ -36,9 +40,17 @@ class Detector(nn.Module):
         fine_feat = self.block4(feat)
         coarse_feat = self.block5(fine_feat)
 
+        fine_context = self.fine_lateral(coarse_feat)
+        fine_context = torch.nn.functional.interpolate(
+            fine_context,
+            size=fine_feat.shape[-2:],
+            mode='nearest',
+        )
+        fine_feat = self.fine_refine(fine_feat + fine_context)
+
         return {
-            "fine": self._format_predictions(self.fine_head(self.fine_dropout(fine_feat))),
-            "coarse": self._format_predictions(self.coarse_head(self.coarse_dropout(coarse_feat))),
+            "fine": self._format_predictions(self.fine_head(fine_feat)),
+            "coarse": self._format_predictions(self.coarse_head(coarse_feat)),
         }
 
     def _format_predictions(self, pred):
