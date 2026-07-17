@@ -99,6 +99,9 @@ def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1
     S = grid_size
     targets = torch.zeros((S, S, boxes_per_cell, 5 + num_classes))
 
+    if anchors is not None and not torch.is_tensor(anchors):
+        anchors = torch.tensor(anchors, dtype=torch.float32)
+
     for (cx, cy, w, h), label in zip(gt_boxes, gt_labels):
         if not (0 <= label < num_classes and w > 0 and h > 0):
             continue
@@ -108,8 +111,8 @@ def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1
         i, j = min(i, S - 1), min(j, S - 1)
 
         if anchors is not None and anchors.size(0) == boxes_per_cell:
-            anchor_ious = anchor_iou(w, h, anchors)
-            slot = anchor_ious.argmax().item()
+            ious = anchor_iou(w, h, anchors)
+            slot = ious.argmax().item()
             occupied = targets[j, i, slot, 0].item() > 0
 
             if occupied:
@@ -117,7 +120,7 @@ def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1
                 existing_h = targets[j, i, slot, 4].item() ** 2
                 existing_iou = anchor_iou(existing_w, existing_h, anchors[slot:slot+1]).item()
 
-                if anchor_ious[slot] <= existing_iou:
+                if ious[slot].item() <= existing_iou:
                     continue
         else:
             occupied_mask = targets[j, i, :, 0].bool()
@@ -150,11 +153,10 @@ def encode_multiscale_targets(gt_boxes, gt_labels, coarse_grid_size, fine_grid_s
     fine_boxes, fine_labels = [], []
     coarse_boxes, coarse_labels = [], []
 
-    if small_object_mask is not None:
+    if small_object_mask is None:
         small_object_mask = [(w * image_size) * (h * image_size) < small_object_area for _, _, w, h in gt_boxes]
 
     for box, label, is_small in zip(gt_boxes, gt_labels, small_object_mask):
-        _, _, w, h = box
         if is_small:
             fine_boxes.append(box)
             fine_labels.append(label)

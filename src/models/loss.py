@@ -14,10 +14,10 @@ def ciou_loss(pred_xyxy, target_xyxy, eps=1e-7):
     iy1 = torch.max(py1, ty1)
     ix2 = torch.min(px2, tx2)
     iy2 = torch.min(py2, ty2)
-    inter = (ix2 - ix1).clamp(0) * (iy2 - iy1).clamp(0)
+    inter = (ix2 - ix1).clamp(min=0) * (iy2 - iy1).clamp(min=0)
 
-    p_area = (px2 - px1).clamp(0) * (py2 - py1).clamp(0)
-    t_area = (tx2 - tx1).clamp(0) * (ty2 - ty1).clamp(0)
+    p_area = (px2 - px1).clamp(min=0) * (py2 - py1).clamp(min=0)
+    t_area = (tx2 - tx1).clamp(min=0) * (ty2 - ty1).clamp(min=0)
     union = p_area + t_area - inter + eps
     iou = inter / union
 
@@ -31,10 +31,10 @@ def ciou_loss(pred_xyxy, target_xyxy, eps=1e-7):
     t_cx, t_cy = (tx1 + tx2) / 2, (ty1 + ty2) / 2
     rho2 = (p_cx - t_cx).pow(2) + (p_cy - t_cy).pow(2)
 
-    p_w = (px2 - px1).clamp(0)
-    p_h = (py2 - py1).clamp(0)
-    t_w = (tx2 - tx1).clamp(0)
-    t_h = (ty2 - ty1).clamp(0)
+    p_w = (px2 - px1).clamp(min=eps)
+    p_h = (py2 - py1).clamp(min=eps)
+    t_w = (tx2 - tx1).clamp(min=eps)
+    t_h = (ty2 - ty1).clamp(min=eps)
 
     v = (4 / (math.pi ** 2)) * (torch.atan(t_w / t_h) - torch.atan(p_w / p_h)).pow(2)
     with torch.no_grad():
@@ -116,7 +116,7 @@ class DetectionLoss(nn.Module):
         noobj_targets = target[noobj_mask][..., 0]
 
         obj_loss = focal_bce_with_logits(obj_logits, obj_targets, self.focal_alpha, self.focal_gamma)
-        noobj_loss = focal_bce_with_logits(noobj_logits, noobj_targets, self.focal_alpha, self.focal_gamma)
+        noobj_loss = focal_bce_with_logits(noobj_logits, noobj_targets, 1.0 - self.focal_alpha, self.focal_gamma)
 
         pred_cls = pred[obj_mask][..., 5:]
         target_cls = target[obj_mask][..., 5:]
@@ -126,7 +126,7 @@ class DetectionLoss(nn.Module):
             target_cls_ids = target_cls.argmax(dim=-1)
             class_loss = F.cross_entropy(
                 pred_cls,
-                target_cls,
+                target_cls_ids,
                 weight=self.class_weights,
                 reduction='sum'
             )

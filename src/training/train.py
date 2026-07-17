@@ -124,7 +124,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
 
     if kaggle_dataset:
         import kagglehub
-        dataset_root = kagglehub.download_dataset(kaggle_dataset, extract=True)
+        dataset_root = kagglehub.dataset_download(kaggle_dataset)
         print(f"Downloaded Kaggle dataset '{kaggle_dataset}' to {dataset_root}")
 
     overfit_mode = overfit_samples > 0
@@ -208,7 +208,6 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
                                   generator=loader_generator,
                                   collate_fn=BDD100KDataset.detection_collate)
     elif use_weighted_sampling:
-        # prepare dataset and indices for sampling (works for Subset and Dataset)
         if isinstance(train_dataset, Subset):
             sampling_dataset = train_dataset.dataset
             sampling_indices = list(train_dataset.indices)

@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 
 from src.data.transform import letterbox_image, letterbox_boxes, random_augment
 from src.detection.bbox import encode_multiscale_targets
-from src.config.configs import CLASSES, NUM_CLASSES, normalize_category
+from src.config.configs import *
 
 class BDD100KDataset(Dataset):
 
@@ -18,6 +18,7 @@ class BDD100KDataset(Dataset):
         self.augment = augment
         self.debug = debug
         self.img_size = img_size
+        self._image_index = self._build_image_index(image_dir)
 
         with open(label_json_path, 'r') as f:
             raw_labels = None
@@ -45,7 +46,7 @@ class BDD100KDataset(Dataset):
             boxes = []
             for label in entry.get('labels', []):
                 category = normalize_category(label.get('category'))
-                if category not in CLASSES:
+                if category not in CLASS_TO_IDX:
                     continue
                 box2d = label.get('box2d')
                 if box2d is None:
@@ -53,7 +54,7 @@ class BDD100KDataset(Dataset):
 
                 boxes.append((
                     box2d['x1'], box2d['y1'], box2d['x2'], box2d['y2'],
-                    CLASSES[category]
+                    CLASS_TO_IDX[category]
                 ))
 
             self.annotations[name] = boxes
@@ -65,6 +66,15 @@ class BDD100KDataset(Dataset):
         
     def __len__(self):
         return len(self.samples)
+    
+    @staticmethod
+    def _build_image_index(image_dir):
+        index = {}
+        for dirpath, _dirnames, filenames in os.walk(image_dir):
+            for fname in filenames:
+                if fname not in index:
+                    index[fname] = os.path.join(dirpath, fname)
+        return index
     
     def class_counts(self, indices=None, num_classes=NUM_CLASSES):
         counts = torch.zeros(num_classes, dtype=torch.long)
@@ -78,7 +88,7 @@ class BDD100KDataset(Dataset):
     
     def __getitem__(self, idx):
         name = self.samples[idx]
-        image_path = os.path.join(self.image_dir, name)
+        image_path = self._image_index.get(name, os.path.join(self.image_dir, name))
 
         image = cv2.imread(image_path)
         if image is None:
@@ -108,7 +118,6 @@ class BDD100KDataset(Dataset):
         labels_tensor = torch.tensor(labels, dtype=torch.long)
 
         if boxes_tensor.numel() > 0:
-            from src.config.configs import SMALL_OBJECT_AREA
             pixel_area = (boxes_tensor[:, 2] * self.img_size) * (boxes_tensor[:, 3] * self.img_size)
             small_object_flags = pixel_area < SMALL_OBJECT_AREA
         else:
@@ -118,9 +127,6 @@ class BDD100KDataset(Dataset):
             image, boxes_tensor, labels_tensor, small_object_flags = random_augment(
                 image, boxes_tensor, labels_tensor, small_object_flags, debug=self.debug
             )
-        
-        from src.config.configs import (BOXES_PER_CELL, COARSE_ANCHORS, FINE_ANCHORS, 
-                                        GRID_SIZE, FINE_GRID_SIZE, NUM_CLASSES, IMG_SIZE)
         
         target = encode_multiscale_targets(
             boxes_tensor.tolist(), labels_tensor.tolist(), GRID_SIZE, FINE_GRID_SIZE, NUM_CLASSES,
