@@ -185,8 +185,8 @@ def decode_predictions(pred, grid_size, num_classes, conf_threshold=0.5):
     S = grid_size
     device = pred.device
 
-    obj = pred[..., 0]
-    class_scores, class_ids = pred[..., 5:5 + num_classes].max(dim=-1)
+    obj = pred[..., 0].sigmoid()
+    class_scores, class_ids = pred[..., 5:5 + num_classes].softmax(dim=-1).max(dim=-1)
     scores = obj * class_scores
     mask = scores > conf_threshold
 

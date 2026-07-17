@@ -110,8 +110,8 @@ def random_crop_scale(image, boxes, labels, scale_range=(0.8, 1.0), min_visibili
     return cropped, new_boxes, new_labels
 
 def random_augment(image, boxes, labels, p_flip=0.5, p_crop=0.5, debug=False):
-    # if random.random() < p_crop:
-    #     image, boxes, labels = random_crop_scale(image, boxes, labels, scale_range=(0.5,1.0), debug=debug)
+    if random.random() < p_crop:
+        image, boxes, labels = random_crop_scale(image, boxes, labels, scale_range=(0.75,1.0), debug=debug)
 
     if random.random() < p_flip:
         image, boxes = hflip(image, boxes)

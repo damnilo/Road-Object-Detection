@@ -5,11 +5,14 @@ import torch.nn.functional as F
 from src.config.configs import NUM_CLASSES
 
 class DetectionLoss(nn.Module):
-    def __init__(self, num_classes=NUM_CLASSES, class_counts=None, lambda_coord=5, lambda_noobj=0.1):
+    def __init__(self, num_classes=NUM_CLASSES, class_counts=None, lambda_coord=5, lambda_noobj=0.1,
+                 focal_gamma=2.0, focal_alpha=0.25):
         super().__init__()
         self.num_classes = num_classes
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
+        self.focal_gamma = focal_gamma
+        self.focal_alpha = focal_alpha
 
         self.mse = nn.MSELoss(reduction='sum')
         if class_counts is None:
@@ -32,8 +35,25 @@ class DetectionLoss(nn.Module):
         else:
             coord_loss = pred.new_zeros(())
 
-        obj_loss = F.binary_cross_entropy(pred[obj_mask][..., 0], target[obj_mask][..., 0], reduction='sum')
-        noobj_loss = F.binary_cross_entropy(pred[noobj_mask][..., 0], target[noobj_mask][..., 0], reduction='sum')
+        def focal_bce_with_logits(logits, targets, alpha, gamma):
+            if logits.numel() == 0:
+                return logits.new_zeros(())
+
+            bce = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
+            probs = torch.sigmoid(logits)
+            pt = probs * targets + (1.0 - probs) * (1.0 - targets)
+            alpha_factor = alpha * targets + (1.0 - alpha) * (1.0 - targets)
+            focal_weight = alpha_factor * (1.0 - pt).pow(gamma)
+            return (focal_weight * bce).sum()
+
+        obj_logits = pred[obj_mask][..., 0]
+        noobj_logits = pred[noobj_mask][..., 0]
+
+        obj_targets = target[obj_mask][..., 0]
+        noobj_targets = target[noobj_mask][..., 0]
+
+        obj_loss = focal_bce_with_logits(obj_logits, obj_targets, self.focal_alpha, self.focal_gamma)
+        noobj_loss = focal_bce_with_logits(noobj_logits, noobj_targets, 1.0 - self.focal_alpha, self.focal_gamma)
 
         pred_cls = pred[obj_mask][..., 5:]
         target_cls = target[obj_mask][..., 5:]
@@ -41,8 +61,8 @@ class DetectionLoss(nn.Module):
             class_loss = pred.new_zeros(())
         else:
             target_class_ids = target_cls.argmax(dim=-1)
-            class_loss = F.nll_loss(
-                pred_cls.clamp_min(1e-8).log(),
+            class_loss = F.cross_entropy(
+                pred_cls,
                 target_class_ids,
                 weight=self.class_weights,
                 reduction='sum',

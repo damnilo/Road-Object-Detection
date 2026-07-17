@@ -4,10 +4,12 @@ import argparse
 from datetime import datetime
 
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 
 from src.config.configs import FINE_GRID_SIZE, GRID_SIZE, NUM_CLASSES
 from src.data.kitti_dataset import KITTIDataset
+from src.data.splitter import sequence_aware_split
 from src.models.detector import Detector
 from src.models.loss import DetectionLoss
 from src.training.eval import evaluate
@@ -52,7 +54,8 @@ def select_indices(total_count, sample_count, seed):
 
 
 def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
-         visualize_targets=0, target_visualization_dir='diagnostics/targets', log_file=None):
+         visualize_targets=0, target_visualization_dir='diagnostics/targets', log_file=None,
+         use_weighted_sampling=True):
     os.environ.setdefault('OMP_NUM_THREADS', str(os.cpu_count() // 2 or 1))
     os.environ.setdefault('MKL_NUM_THREADS', str(os.cpu_count() // 2 or 1))
 
@@ -68,10 +71,10 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
 
     overfit_mode = overfit_samples > 0
     base_dataset = KITTIDataset('dataset/images/train', 'dataset/labels/train', augment=not overfit_mode)
-    indices = list(range(len(base_dataset)))
-    random.shuffle(indices)
 
     if overfit_mode:
+        indices = list(range(len(base_dataset)))
+        random.shuffle(indices)
         selected_indices = indices[:min(overfit_samples, len(indices))]
         train_dataset = Subset(base_dataset, selected_indices)
         val_dataset = Subset(
@@ -80,30 +83,51 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         )
         class_counts = base_dataset.class_counts(selected_indices)
     else:
-        split = int(0.8 * len(indices))
-        train_dataset = Subset(base_dataset, indices[:split])
+        train_idx, val_idx = sequence_aware_split(base_dataset, seed=seed)
+        train_dataset = Subset(base_dataset, train_idx)
         val_dataset = Subset(
             KITTIDataset('dataset/images/train', 'dataset/labels/train', augment=False),
-            indices[split:],
+            val_idx,
         )
-        class_counts = base_dataset.class_counts(indices[:split])
+        class_counts = base_dataset.class_counts(train_idx)
 
+    print(f"train_dataset size: {len(train_dataset)}, val_dataset size: {len(val_dataset)}")
+        
     loader_generator = torch.Generator().manual_seed(seed)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                              generator=loader_generator,
-                              collate_fn=KITTIDataset.detection_collate)
+
+    if overfit_mode:
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                                  generator=loader_generator,
+                                  collate_fn=KITTIDataset.detection_collate)
+    elif use_weighted_sampling:
+        train_weights = base_dataset.sample_weights(train_idx, class_counts=class_counts)
+        sampler = WeightedRandomSampler(
+            weights=train_weights,
+            num_samples=len(train_idx),
+            replacement=True,
+            generator=loader_generator,
+        )
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False,
+                                  sampler=sampler,
+                                  collate_fn=KITTIDataset.detection_collate)
+    else:
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                                  generator=loader_generator,
+                                  collate_fn=KITTIDataset.detection_collate)
+
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
                             collate_fn=KITTIDataset.detection_collate)
 
     model = Detector(num_classes=NUM_CLASSES).to(device)
     model = maybe_compile_model(model)
     criterion = DetectionLoss(num_classes=NUM_CLASSES, class_counts=class_counts).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.002, weight_decay=1e-4)
+    scheduler = CosineAnnealingLR(optimizer, T_max=max(epochs, 1), eta_min=1e-5)
     best_map = float('-inf')
     start_epoch = 0
     log_path = log_file or 'logs/training_log.csv'
     append_log = False
+    patience = 0
 
     if resume_path:
         checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
@@ -143,6 +167,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
             optimizer.zero_grad()
             loss, loss_stats = criterion(model(images), targets)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
 
             total_loss += loss.item()
@@ -152,7 +177,6 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
             if (batch_idx + 1) % 100 == 0:
                 print(f'Batch {batch_idx + 1}/{len(train_loader)}: loss={loss.item():.4f}, Avg Loss: {total_loss / (batch_idx + 1):.4f}')
 
-        scheduler.step()
         if not len(train_loader):
             raise RuntimeError("Training dataset is empty")
 
@@ -167,8 +191,14 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         print(f'Epoch {epoch + 1}/{epochs}: loss={avg_loss:.4f}, mAP={mean_ap:.4f}')
 
         if mean_ap > best_map:
+            patience = 0
             best_map = mean_ap
             torch.save(model.state_dict(), 'checkpoints/best_detector_weights.pth')
+        else:
+            patience += 1
+            if patience >= 7:
+                print("Early stopping triggered due to no improvement in mAP for 7 consecutive epochs.")
+                break
 
         torch.save({
             'epoch': epoch + 1,
@@ -178,6 +208,8 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
             'best_map': best_map,
             'log_file': logger.log_dir,
         }, 'checkpoints/latest.pth')
+
+        scheduler.step()
 
     torch.save(model.state_dict(), 'checkpoints/detector_weights.pth')
 
@@ -196,6 +228,12 @@ if __name__ == '__main__':
                         help='Directory for augmented target visualizations.')
     parser.add_argument('--log-file', default=None,
                         help='Base CSV path for the training log. Fresh runs still get unique files.')
+    parser.add_argument('--weighted-sampling', dest='use_weighted_sampling', action='store_true',
+                        help='Use class-aware image sampling during normal training (default).')
+    parser.add_argument('--no-weighted-sampling', dest='use_weighted_sampling', action='store_false',
+                        help='Disable class-aware image sampling and use plain shuffling instead.')
+    parser.set_defaults(use_weighted_sampling=True)
     args = parser.parse_args()
     main(args.epochs, args.batch_size, args.seed, args.resume, args.overfit_samples,
-         args.visualize_targets, args.target_visualization_dir, args.log_file)
+         args.visualize_targets, args.target_visualization_dir, args.log_file,
+         args.use_weighted_sampling)

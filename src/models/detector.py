@@ -58,9 +58,9 @@ class Detector(nn.Module):
         pred = pred.view(batch_size, self.boxes_per_cell, 5 + self.num_classes, grid_h, grid_w)
         pred = pred.permute(0, 3, 4, 1, 2)
 
-        obj = pred[..., 0:1].sigmoid()
+        obj = pred[..., 0:1]
         txty = pred[..., 1:3].sigmoid()
         twth = pred[..., 3:5]
-        class_probs = pred[..., 5:].softmax(dim=-1)
+        class_logits = pred[..., 5:]
 
-        return torch.cat([obj, txty, twth, class_probs], dim=-1)
+        return torch.cat([obj, txty, twth, class_logits], dim=-1)

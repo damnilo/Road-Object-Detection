@@ -81,6 +81,34 @@ class KITTIDataset(Dataset):
             for label in labels:
                 counts[label] += 1
         return counts.clamp_min(1).tolist()
+
+    def sample_weights(self, indices=None, class_counts=None, empty_weight=0.1):
+        indices = list(range(len(self))) if indices is None else list(indices)
+        if class_counts is None:
+            class_counts = self.class_counts(indices)
+
+        class_counts = torch.as_tensor(class_counts, dtype=torch.float32).clamp_min(1.0)
+        inverse_freq = 1.0 / class_counts
+
+        weights = []
+        for idx in indices:
+            label_path = os.path.join(self.label_dir, self.samples[idx] + '.txt')
+            if not os.path.exists(label_path):
+                weights.append(empty_weight)
+                continue
+
+            _, labels = self._parse_label(label_path)
+            if not labels:
+                weights.append(empty_weight)
+                continue
+
+            label_tensor = torch.tensor(labels, dtype=torch.long)
+            image_weight = inverse_freq[label_tensor].mean().item()
+            weights.append(max(image_weight, empty_weight))
+
+        weights = torch.tensor(weights, dtype=torch.float32)
+        weights = weights / weights.mean().clamp_min(1e-6)
+        return weights.tolist()
     
     def __getitem__(self, idx):
         name = self.samples[idx]
