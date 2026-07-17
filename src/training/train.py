@@ -8,7 +8,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 
 from src.config.configs import FINE_GRID_SIZE, GRID_SIZE, NUM_CLASSES
-from data.bdd100k_dataset import BDD100KDataset
+from src.data.bdd100k_dataset import BDD100KDataset
 from src.data.splitter import sequence_aware_split
 from src.models.detector import Detector
 from src.models.loss import DetectionLoss
@@ -70,26 +70,74 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         torch.cuda.manual_seed_all(seed)
 
     overfit_mode = overfit_samples > 0
-    base_dataset = BDD100KDataset('dataset/images/train', 'dataset/labels/train', augment=not overfit_mode)
 
-    if overfit_mode:
-        indices = list(range(len(base_dataset)))
-        random.shuffle(indices)
-        selected_indices = indices[:min(overfit_samples, len(indices))]
-        train_dataset = Subset(base_dataset, selected_indices)
-        val_dataset = Subset(
-            BDD100KDataset('dataset/images/train', 'dataset/labels/train', augment=False),
-            selected_indices,
-        )
-        class_counts = base_dataset.class_counts(selected_indices)
+    # locate a label JSON file for BDD100KDataset. Accept common locations under dataset/labels
+    def find_label_json(candidate_dir='dataset/labels'):
+        if os.path.isfile(candidate_dir) and candidate_dir.endswith('.json'):
+            return candidate_dir
+        if os.path.isdir(candidate_dir):
+            # look for any json in that directory
+            for fname in os.listdir(candidate_dir):
+                if fname.lower().endswith('.json'):
+                    return os.path.join(candidate_dir, fname)
+        # try parent folder
+        parent = os.path.dirname(candidate_dir)
+        if os.path.isdir(parent):
+            for fname in os.listdir(parent):
+                if fname.lower().endswith('.json'):
+                    return os.path.join(parent, fname)
+        return None
+
+    label_json = find_label_json('dataset/labels')
+
+    # prefer explicit 100kLabels pre-split directories when present
+    base_100k = os.path.join(os.getcwd(), '100kLabels')
+    train_dir_100k = os.path.join(base_100k, 'train')
+    val_dir_100k = os.path.join(base_100k, 'val')
+
+    train_dataset = None
+    val_dataset = None
+
+    if os.path.isdir(train_dir_100k) and os.path.isdir(val_dir_100k):
+        train_dataset = BDD100KDataset('dataset/images/train', train_dir_100k, augment=not overfit_mode, subsets=None)
+        val_dataset = BDD100KDataset('dataset/images/val', val_dir_100k, augment=False, subsets=None)
     else:
-        train_idx, val_idx = sequence_aware_split(base_dataset, seed=seed)
-        train_dataset = Subset(base_dataset, train_idx)
-        val_dataset = Subset(
-            BDD100KDataset('dataset/images/train', 'dataset/labels/train', augment=False),
-            val_idx,
-        )
-        class_counts = base_dataset.class_counts(train_idx)
+        if label_json is None:
+            raise FileNotFoundError('Could not find a label JSON file for BDD100KDataset under dataset/labels and no 100kLabels split found')
+
+        base_dataset = BDD100KDataset('dataset/images/train', label_json, augment=not overfit_mode)
+
+        if overfit_mode:
+            indices = list(range(len(base_dataset)))
+            random.shuffle(indices)
+            selected_indices = indices[:min(overfit_samples, len(indices))]
+            train_dataset = Subset(base_dataset, selected_indices)
+            val_dataset = Subset(
+                BDD100KDataset('dataset/images/train', label_json, augment=False),
+                selected_indices,
+            )
+            class_counts = base_dataset.class_counts(selected_indices)
+        else:
+            train_idx, val_idx = sequence_aware_split(base_dataset, seed=seed)
+            train_dataset = Subset(base_dataset, train_idx)
+            val_dataset = Subset(
+                BDD100KDataset('dataset/images/train', label_json, augment=False),
+                val_idx,
+            )
+            class_counts = base_dataset.class_counts(train_idx)
+
+    # compute class counts for the training set regardless of how it was created
+    if train_dataset is None:
+        raise RuntimeError('Training dataset could not be constructed')
+
+    if isinstance(train_dataset, Subset):
+        underlying = train_dataset.dataset
+        indices_for_counts = train_dataset.indices
+    else:
+        underlying = train_dataset
+        indices_for_counts = None
+
+    class_counts = underlying.class_counts(indices_for_counts)
 
     print(f"train_dataset size: {len(train_dataset)}, val_dataset size: {len(val_dataset)}")
         
@@ -100,10 +148,31 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
                                   generator=loader_generator,
                                   collate_fn=BDD100KDataset.detection_collate)
     elif use_weighted_sampling:
-        train_weights = base_dataset.sample_weights(train_idx, class_counts=class_counts)
+        # prepare dataset and indices for sampling (works for Subset and Dataset)
+        if isinstance(train_dataset, Subset):
+            sampling_dataset = train_dataset.dataset
+            sampling_indices = list(train_dataset.indices)
+        else:
+            sampling_dataset = train_dataset
+            sampling_indices = list(range(len(train_dataset)))
+
+        if hasattr(sampling_dataset, 'sample_weights'):
+            train_weights = sampling_dataset.sample_weights(sampling_indices, class_counts=class_counts)
+        else:
+            inv_class_freq = [1.0 / c for c in class_counts]
+            train_weights = []
+            for idx in sampling_indices:
+                name = sampling_dataset.samples[idx]
+                labels = [entry[-1] for entry in sampling_dataset.annotations.get(name, [])]
+                if not labels:
+                    train_weights.append(1.0)
+                else:
+                    w = sum(inv_class_freq[l] for l in labels) / len(labels)
+                    train_weights.append(w)
+
         sampler = WeightedRandomSampler(
             weights=train_weights,
-            num_samples=len(train_idx),
+            num_samples=len(sampling_indices),
             replacement=True,
             generator=loader_generator,
         )
@@ -147,9 +216,13 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
     logger = TrainingLogger(log_dir=log_path, num_classes=NUM_CLASSES, append=append_log)
 
     if visualize_targets > 0:
+        vis_label_dir = 'dataset/labels/train'
+        if os.path.isdir(os.path.join(os.getcwd(), '100kLabels', 'train')):
+            vis_label_dir = os.path.join(os.getcwd(), '100kLabels', 'train')
+
         save_augmented_target_visualizations(
             image_dir='dataset/images/train',
-            label_dir='dataset/labels/train',
+            label_dir=vis_label_dir,
             output_dir=target_visualization_dir,
             sample_count=visualize_targets,
             seed=seed,

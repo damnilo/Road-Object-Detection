@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from src.config.configs import NUM_CLASSES
-from src.data.kitti_dataset import KITTIDataset
+from src.data.bdd100k_dataset import BDD100KDataset
 from src.detection.bbox import decode_targets, xywh_to_xyxy
 
 
@@ -49,7 +49,7 @@ def save_augmented_target_visualizations(image_dir='dataset/images/train', label
                                          output_dir='diagnostics/targets', sample_count=8, seed=42,
                                          augment=True):
     os.makedirs(output_dir, exist_ok=True)
-    dataset = KITTIDataset(image_dir, label_dir, augment=augment, debug=True)
+    dataset = BDD100KDataset(image_dir, label_dir, augment=augment, debug=True)
     indices = list(range(len(dataset)))
     random.Random(seed).shuffle(indices)
 

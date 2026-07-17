@@ -20,7 +20,24 @@ class BDD100KDataset(Dataset):
         self.img_size = img_size
 
         with open(label_json_path, 'r') as f:
-            raw_labels = json.load(f)
+            raw_labels = None
+            if os.path.isdir(label_json_path):
+                raw_labels = []
+                for fname in sorted(os.listdir(label_json_path)):
+                    if not fname.lower().endswith('.json'):
+                        continue
+                    full = os.path.join(label_json_path, fname)
+                    try:
+                        with open(full, 'r') as jf:
+                            entry = json.load(jf)
+                            if isinstance(entry, list):
+                                raw_labels.extend(entry)
+                            else:
+                                raw_labels.append(entry)
+                    except Exception:
+                        continue
+            else:
+                raw_labels = json.load(f)
 
         self.annotations = {}
         for entry in raw_labels:
