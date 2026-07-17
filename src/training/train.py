@@ -114,6 +114,8 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
 
     torch.set_num_threads(os.cpu_count() // 2 or 1)
     torch.set_num_interop_threads(os.cpu_count() // 2 or 1)
+    CHECKPOINT_DIR = "/content/drive/MyDrive/BDD100K_Checkpoints"
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     os.makedirs('checkpoints', exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -265,6 +267,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         best_map = checkpoint['best_map']
+        start_batch = checkpoint['batch'] if 'batch' in checkpoint else 0
         start_epoch = checkpoint['epoch']
         log_path = checkpoint.get('log_file', log_path)
         append_log = os.path.exists(log_path)
@@ -308,6 +311,17 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
 
             if (batch_idx + 1) % 100 == 0:
                 print(f'Batch {batch_idx + 1}/{len(train_loader)}: loss={loss.item():.4f}, Avg Loss: {total_loss / (batch_idx + 1):.4f}')
+            
+            if (batch_idx + 1) % 500 == 0:
+                torch.save({
+                    'epoch': epoch + 1,
+                    'batch': batch_idx + 1,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
+                    'best_map': best_map,
+                    'log_file': logger.log_dir,
+                }, os.path.join(CHECKPOINT_DIR, f'checkpoint_epoch{epoch + 1}_batch{batch_idx + 1}.pth'))
 
         if not len(train_loader):
             raise RuntimeError("Training dataset is empty")
@@ -325,7 +339,14 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         if mean_ap > best_map:
             patience = 0
             best_map = mean_ap
-            torch.save(model.state_dict(), 'checkpoints/best_detector_weights.pth')
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'best_map': best_map,
+                'log_file': logger.log_dir,
+            }, os.path.join(CHECKPOINT_DIR, 'best_weights.pth'))
         else:
             patience += 1
             if patience >= 7:
@@ -339,11 +360,11 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
             'scheduler_state_dict': scheduler.state_dict(),
             'best_map': best_map,
             'log_file': logger.log_dir,
-        }, 'checkpoints/latest.pth')
+        }, os.path.join(CHECKPOINT_DIR, 'latest.pth'))
 
         scheduler.step()
 
-    torch.save(model.state_dict(), 'checkpoints/detector_weights.pth')
+    torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'detector_weights.pth'))
 
 
 if __name__ == '__main__':
