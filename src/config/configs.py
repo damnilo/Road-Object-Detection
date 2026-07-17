@@ -22,3 +22,6 @@ CLASSES = {
 
 NUM_CLASSES = len(CLASSES)
 CLASS_TO_IDX = {cls: idx for idx, cls in CLASSES.items()}
+
+FINE_ANCHORS = [(0.03, 0.08), (0.05, 0.04)]
+COARSE_ANCHORS = [(0.12, 0.10), (0.25, 0.18)]

@@ -59,7 +59,7 @@ def random_color_jitter(image, brightness=0.2, contrast=0.2, p=0.5):
 
     return image
 
-def random_crop_scale(image, boxes, labels, scale_range=(0.8, 1.0), min_visibility=0.3, debug=False):
+def random_crop_scale(image, boxes, labels, extra=None, scale_range=(0.8, 1.0), min_visibility=0.3, debug=False):
 
     _, H, W = image.shape
     scale = random.uniform(*scale_range)
@@ -74,7 +74,7 @@ def random_crop_scale(image, boxes, labels, scale_range=(0.8, 1.0), min_visibili
     ).squeeze(0)
 
     if len(boxes) == 0:
-        return cropped, boxes, labels
+        return cropped, boxes, labels, extra
 
     cx, cy, w, h = boxes[:, 0] * W, boxes[:, 1] * H, boxes[:, 2] * W, boxes[:, 3] * H
     x1, y1 = cx - w / 2, cy - h / 2
@@ -95,7 +95,7 @@ def random_crop_scale(image, boxes, labels, scale_range=(0.8, 1.0), min_visibili
     keep = (new_area / orig_area) >= min_visibility
 
     if keep.sum() == 0:
-        return image, boxes, labels
+        return image, boxes, labels, extra
 
     nx1, ny1, nx2, ny2 = nx1[keep] - left, ny1[keep] - top, nx2[keep] - left, ny2[keep] - top
 
@@ -106,16 +106,48 @@ def random_crop_scale(image, boxes, labels, scale_range=(0.8, 1.0), min_visibili
 
     new_boxes = torch.stack([new_cx, new_cy, new_w, new_h], dim=1)
     new_labels = labels[keep]
+    new_extra = extra[keep] if extra is not None else None
 
-    return cropped, new_boxes, new_labels
+    return cropped, new_boxes, new_labels, new_extra
 
-def random_augment(image, boxes, labels, p_flip=0.5, p_crop=0.5, debug=False):
+def random_augment(image, boxes, labels, extra=None, p_flip=0.5, p_crop=0.5, debug=False):
     if random.random() < p_crop:
-        image, boxes, labels = random_crop_scale(image, boxes, labels, scale_range=(0.75,1.0), debug=debug)
+        image, boxes, labels, extra = random_crop_scale(image, boxes, labels, extra, scale_range=(0.75,1.0), debug=debug)
 
     if random.random() < p_flip:
         image, boxes = hflip(image, boxes)
 
     image = random_color_jitter(image)
 
-    return image, boxes, labels
+    return image, boxes, labels, extra
+
+def mosaic_augment(samples, img_size):
+    half = img_size // 2
+    canvas = torch.zeros((3, img_size, img_size), dtype=samples[0][0].dtype)
+    quadrant_offset = [(0,0), (0, half), (half, 0), (half, half)]
+
+    all_boxes = []
+    all_labels = []
+
+    for (image, boxes, labels), (top, left) in zip(samples, quadrant_offset):
+        resized = torch.nn.functional.interpolate(
+            image.unsqueeze(0), size=(half, half), mode='bilinear', align_corners=False
+        ).squeeze(0)
+        canvas[:, top:top + half, left:left + half] = resized
+
+        if boxes.numel() > 0:
+            cx = (boxes[:, 0] * half + left) / img_size
+            cy = (boxes[:, 1] * half + top) / img_size
+            w = boxes[:, 2] * half / img_size
+            h = boxes[:, 3] * half / img_size
+            all_boxes.append(torch.stack([cx, cy, w, h], dim=1))
+            all_labels.append(labels)
+
+    if all_boxes:
+        combined_boxes = torch.cat(all_boxes, dim=0)
+        combined_labels = torch.cat(all_labels, dim=0)
+    else:
+        combined_boxes = samples[0][1].new_zeros((0, 4))
+        combined_labels = samples[0][2].new_zeros((0,), dtype=torch.long)
+
+    return canvas, combined_boxes, combined_labels

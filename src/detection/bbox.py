@@ -85,8 +85,17 @@ def nms(boxes_xyxy, scores, class_ids, iou_threshold=0.45):
 
     keep = torch.tensor(keep, dtype=torch.long, device=boxes_xyxy.device)
     return keep[scores[keep].argsort(descending=True)]
+
+def anchor_iou(w, h, anchors):
+    inter_w = torch.min(torch.full_like(anchors[:, 0], w), anchors[:, 0])
+    inter_h = torch.min(torch.full_like(anchors[:, 1], h), anchors[:, 1])
+    inter = inter_w * inter_h
+    box_area = w * h
+    anchor_area = anchors[:, 0] * anchors[:, 1]
+    union = box_area + anchor_area - inter
+    return inter / union.clamp(min=1e-6)
     
-def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1):
+def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1, anchors=None):
     S = grid_size
     targets = torch.zeros((S, S, boxes_per_cell, 5 + num_classes))
 
@@ -98,14 +107,29 @@ def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1
         i, j = int(cx * S), int(cy * S)
         i, j = min(i, S - 1), min(j, S - 1)
 
-        occupied = targets[j, i, :, 0].bool()
-        if (~occupied).any():
-            slot = (~occupied).nonzero(as_tuple=True)[0][0].item()
+        if anchors is not None and anchors.size(0) == boxes_per_cell:
+            anchor_ious = anchor_iou(w, h, anchors)
+            slot = anchor_ious.argmax().item()
+            occupied = targets[j, i, slot, 0].item() > 0
+
+            if occupied:
+                existing_w = targets[j, i, slot, 3].item() ** 2
+                existing_h = targets[j, i, slot, 4].item() ** 2
+                existing_iou = anchor_iou(existing_w, existing_h, anchors[slot:slot+1]).item()
+
+                if anchor_ious[slot] <= existing_iou:
+                    continue
         else:
-            existing_areas = targets[j, i, :, 3].square() * targets[j, i, :, 4].square()
-            slot = existing_areas.argmin().item()
-            if w * h <= existing_areas[slot].item():
-                continue
+            occupied_mask = targets[j, i, :, 0].bool()
+
+            if (~occupied_mask).any():
+                slot = (~occupied_mask).nonzero(as_tuple=True)[0][0].item()
+            else:
+                existing_areas = targets[j, i, :, 3].square() * targets[j, i, :, 4].square()
+                slot = existing_areas.argmin().item()
+
+                if w * h <= existing_areas[slot].item():
+                    continue            
 
         tx, ty = cx * S - i, cy * S - j
 
@@ -121,14 +145,17 @@ def encode_targets(gt_boxes, gt_labels, grid_size, num_classes, boxes_per_cell=1
 
 def encode_multiscale_targets(gt_boxes, gt_labels, coarse_grid_size, fine_grid_size,
                               num_classes, boxes_per_cell=1, image_size=416,
-                              small_object_area=32 * 32):
-    """Assign every ground-truth box to exactly one detection scale."""
+                              small_object_area=32 * 32, small_object_mask=None,
+                              fine_anchors=None, coarse_anchors=None):
     fine_boxes, fine_labels = [], []
     coarse_boxes, coarse_labels = [], []
 
-    for box, label in zip(gt_boxes, gt_labels):
+    if small_object_mask is not None:
+        small_object_mask = [(w * image_size) * (h * image_size) < small_object_area for _, _, w, h in gt_boxes]
+
+    for box, label, is_small in zip(gt_boxes, gt_labels, small_object_mask):
         _, _, w, h = box
-        if (w * image_size) * (h * image_size) < small_object_area:
+        if is_small:
             fine_boxes.append(box)
             fine_labels.append(label)
         else:
@@ -136,8 +163,8 @@ def encode_multiscale_targets(gt_boxes, gt_labels, coarse_grid_size, fine_grid_s
             coarse_labels.append(label)
 
     return {
-        "fine": encode_targets(fine_boxes, fine_labels, fine_grid_size, num_classes, boxes_per_cell),
-        "coarse": encode_targets(coarse_boxes, coarse_labels, coarse_grid_size, num_classes, boxes_per_cell),
+        "fine": encode_targets(fine_boxes, fine_labels, fine_grid_size, num_classes, boxes_per_cell, anchors=fine_anchors),
+        "coarse": encode_targets(coarse_boxes, coarse_labels, coarse_grid_size, num_classes, boxes_per_cell, anchors=coarse_anchors),
     }
 
 def decode_targets(target, num_classes=None):

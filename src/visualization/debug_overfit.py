@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from src.config.configs import FINE_GRID_SIZE, GRID_SIZE, NUM_CLASSES
-from src.data.kitti_dataset import KITTIDataset
+from data.bdd100k_dataset import KITTIDataset
 from src.detection.bbox import decode_multiscale_predictions, decode_targets, xywh_to_xyxy
 from src.models.detector import Detector
 
