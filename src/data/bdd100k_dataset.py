@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 
 from src.data.transform import letterbox_image, letterbox_boxes, random_augment
 from src.detection.bbox import encode_multiscale_targets
-from src.config.configs import CLASSES
+from src.config.configs import CLASSES, NUM_CLASSES, normalize_category
 
 class BDD100KDataset(Dataset):
 
@@ -44,7 +44,7 @@ class BDD100KDataset(Dataset):
             name = entry['name']
             boxes = []
             for label in entry.get('labels', []):
-                category = label.get('category')
+                category = normalize_category(label.get('category'))
                 if category not in CLASSES:
                     continue
                 box2d = label.get('box2d')
@@ -66,7 +66,7 @@ class BDD100KDataset(Dataset):
     def __len__(self):
         return len(self.samples)
     
-    def class_counts(self, indices=None, num_classes=8):
+    def class_counts(self, indices=None, num_classes=NUM_CLASSES):
         counts = torch.zeros(num_classes, dtype=torch.long)
         indices = range(len(self.samples)) if indices is None else indices
         for idx in indices:

@@ -22,6 +22,20 @@ CLASSES = {
     9: 'rider'
 }
 
+CATEGORY_ALIASES = {
+    'traffic light': 'light',
+    'bike': 'bicycle',
+    'motor': 'motorcycle',
+    'pedestrian': 'person',
+}
+
+def normalize_category(name):
+    if name is None:
+        return None
+    
+    name = name.strip().lower()
+    return CATEGORY_ALIASES.get(name, name)
+
 NUM_CLASSES = len(CLASSES)
 CLASS_TO_IDX = {cls: idx for idx, cls in CLASSES.items()}
 

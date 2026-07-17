@@ -1,1 +1,1 @@
-torch, opencv-python, numpy, tqdm, matplotlib, 
+torch, opencv-python, numpy, tqdm, matplotlib, kagglehub
