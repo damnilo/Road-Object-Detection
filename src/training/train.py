@@ -274,6 +274,8 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
 
     if not resume_path:
         log_path = build_run_log_path(log_path)
+        start_epoch = 0
+        start_batch = 0
 
     logger = TrainingLogger(log_dir=log_path, num_classes=NUM_CLASSES, append=append_log)
 
@@ -297,6 +299,9 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         epoch_stats = {'coord': 0.0, 'obj': 0.0, 'noobj': 0.0, 'class': 0.0}
 
         for batch_idx, (images, targets, _, _) in enumerate(train_loader):
+            if start_epoch == epoch and batch_idx < start_batch:
+                continue
+
             images = images.to(device)
             targets = {scale: target.to(device) for scale, target in targets.items()}
             optimizer.zero_grad()
