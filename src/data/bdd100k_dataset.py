@@ -7,17 +7,7 @@ from torch.utils.data import Dataset
 
 from src.data.transform import letterbox_image, letterbox_boxes, random_augment
 from src.detection.bbox import encode_multiscale_targets
-
-BDD_CATEGORY_TO_CLASS = {
-    "car": 0,
-    "rider": 5,
-    "bicycle": 5,
-    "truck": 2,
-    "pedestrian": 3,
-    "motorcycle": 5,
-    "bus": 2,
-    "train": 6
-}
+from src.config.configs import CLASSES
 
 class BDD100KDataset(Dataset):
 
@@ -27,6 +17,7 @@ class BDD100KDataset(Dataset):
         self.label_json_path = label_json_path
         self.augment = augment
         self.debug = debug
+        self.img_size = img_size
 
         with open(label_json_path, 'r') as f:
             raw_labels = json.load(f)
@@ -37,7 +28,7 @@ class BDD100KDataset(Dataset):
             boxes = []
             for label in entry.get('labels', []):
                 category = label.get('category')
-                if category not in BDD_CATEGORY_TO_CLASS:
+                if category not in CLASSES:
                     continue
                 box2d = label.get('box2d')
                 if box2d is None:
@@ -45,7 +36,7 @@ class BDD100KDataset(Dataset):
 
                 boxes.append((
                     box2d['x1'], box2d['y1'], box2d['x2'], box2d['y2'],
-                    BDD_CATEGORY_TO_CLASS[category]
+                    CLASSES[category]
                 ))
 
             self.annotations[name] = boxes

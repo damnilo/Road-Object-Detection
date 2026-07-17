@@ -8,7 +8,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 
 from src.config.configs import FINE_GRID_SIZE, GRID_SIZE, NUM_CLASSES
-from src.data.kitti_dataset import KITTIDataset
+from data.bdd100k_dataset import BDD100KDataset
 from src.data.splitter import sequence_aware_split
 from src.models.detector import Detector
 from src.models.loss import DetectionLoss
@@ -70,7 +70,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         torch.cuda.manual_seed_all(seed)
 
     overfit_mode = overfit_samples > 0
-    base_dataset = KITTIDataset('dataset/images/train', 'dataset/labels/train', augment=not overfit_mode)
+    base_dataset = BDD100KDataset('dataset/images/train', 'dataset/labels/train', augment=not overfit_mode)
 
     if overfit_mode:
         indices = list(range(len(base_dataset)))
@@ -78,7 +78,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         selected_indices = indices[:min(overfit_samples, len(indices))]
         train_dataset = Subset(base_dataset, selected_indices)
         val_dataset = Subset(
-            KITTIDataset('dataset/images/train', 'dataset/labels/train', augment=False),
+            BDD100KDataset('dataset/images/train', 'dataset/labels/train', augment=False),
             selected_indices,
         )
         class_counts = base_dataset.class_counts(selected_indices)
@@ -86,7 +86,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         train_idx, val_idx = sequence_aware_split(base_dataset, seed=seed)
         train_dataset = Subset(base_dataset, train_idx)
         val_dataset = Subset(
-            KITTIDataset('dataset/images/train', 'dataset/labels/train', augment=False),
+            BDD100KDataset('dataset/images/train', 'dataset/labels/train', augment=False),
             val_idx,
         )
         class_counts = base_dataset.class_counts(train_idx)
@@ -98,7 +98,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
     if overfit_mode:
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                                   generator=loader_generator,
-                                  collate_fn=KITTIDataset.detection_collate)
+                                  collate_fn=BDD100KDataset.detection_collate)
     elif use_weighted_sampling:
         train_weights = base_dataset.sample_weights(train_idx, class_counts=class_counts)
         sampler = WeightedRandomSampler(
@@ -109,14 +109,14 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         )
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False,
                                   sampler=sampler,
-                                  collate_fn=KITTIDataset.detection_collate)
+                                  collate_fn=BDD100KDataset.detection_collate)
     else:
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                                   generator=loader_generator,
-                                  collate_fn=KITTIDataset.detection_collate)
+                                  collate_fn=BDD100KDataset.detection_collate)
 
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
-                            collate_fn=KITTIDataset.detection_collate)
+                            collate_fn=BDD100KDataset.detection_collate)
 
     model = Detector(num_classes=NUM_CLASSES).to(device)
     model = maybe_compile_model(model)

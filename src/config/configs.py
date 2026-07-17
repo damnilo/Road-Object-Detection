@@ -10,14 +10,16 @@ FINE_GRID_SIZE = IMG_SIZE // (DOWNSAMPLE_FACTOR // 2)
 SMALL_OBJECT_AREA = 32 * 32
 
 CLASSES = {
-    0: "car",
-    1: "van",
-    2: "truck",
-    3: "pedestrian",
-    4: "Person_sitting",
-    5: "cyclist",
-    6: "tram",
-    7: "misc"
+    0: 'car',
+    1: 'bus',
+    2: 'truck',
+    3: 'person',
+    4: 'bicycle',
+    5: 'motorcycle',
+    6: 'train',
+    7: 'light',
+    8: 'traffic sign',
+    9: 'rider'
 }
 
 NUM_CLASSES = len(CLASSES)

@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from src.config.configs import FINE_GRID_SIZE, GRID_SIZE, NUM_CLASSES
-from data.bdd100k_dataset import KITTIDataset
+from data.bdd100k_dataset import BDD100KDataset
 from src.detection.bbox import decode_multiscale_predictions, decode_targets, xywh_to_xyxy
 from src.models.detector import Detector
 
@@ -48,7 +48,7 @@ def draw_xywh_boxes(frame, boxes, labels, color, prefix=''):
 
 
 def build_subset_dataset(sample_count, seed, augment=False):
-    dataset = KITTIDataset('dataset/images/train', 'dataset/labels/train', augment=augment)
+    dataset = BDD100KDataset('dataset/images/train', 'dataset/labels/train', augment=augment)
     indices = list(range(len(dataset)))
     random.Random(seed).shuffle(indices)
     selected_indices = indices[:min(sample_count, len(indices))]
@@ -140,7 +140,7 @@ def main(weights_path, sample_count=16, batch_size=4, seed=42, output_dir='diagn
         subset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=KITTIDataset.detection_collate,
+        collate_fn=BDD100KDataset.detection_collate,
     )
 
     model = Detector(num_classes=NUM_CLASSES).to(device)

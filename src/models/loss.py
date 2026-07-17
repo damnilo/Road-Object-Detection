@@ -36,7 +36,7 @@ def ciou_loss(pred_xyxy, target_xyxy, eps=1e-7):
     t_w = (tx2 - tx1).clamp(0)
     t_h = (ty2 - ty1).clamp(0)
 
-    v = (4 / (math.pi ** 2)) * (torch.atan(t_w / t_h) - torch.atan(p_w / p_h), 2).pow(2)
+    v = (4 / (math.pi ** 2)) * (torch.atan(t_w / t_h) - torch.atan(p_w / p_h)).pow(2)
     with torch.no_grad():
         alpha = v / (1 - iou + v + eps)
     
@@ -81,7 +81,7 @@ class DetectionLoss(nn.Module):
         h = sqrt_h ** 2
 
         x1, y1 = cx - w / 2, cy - h / 2
-        x2, y2 = cx + 2 / 2, cy + h / 2
+        x2, y2 = cx + w / 2, cy + h / 2
 
         return torch.stack([x1, y1, x2, y2], dim=1)
     
@@ -102,7 +102,7 @@ class DetectionLoss(nn.Module):
                 return logits.new_zeros(())
             
             bce = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
-            probs = torch.sigmoid()
+            probs = torch.sigmoid(logits)
             pt = probs * targets + (1.0 - probs) * (1.0 - targets)
             alpha_factor = alpha * targets + (1.0 - alpha) * (1.0 - targets)
             focal_weight = alpha_factor * (1.0 - pt).pow(gamma)
@@ -137,7 +137,7 @@ class DetectionLoss(nn.Module):
         return total, {
             "coord": coord_loss.item() / batch_size,
             "obj": obj_loss.item() / batch_size,
-            "noobj_loss": noobj_loss.item() / batch_size,
+            "noobj": noobj_loss.item() / batch_size,
             "class": class_loss.item() / batch_size
         }
 
