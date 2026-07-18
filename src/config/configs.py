@@ -22,8 +22,6 @@ CLASSES = {
     9: 'rider'
 }
 
-CLS_TO_IDX = {cls: idx for idx, cls in CLASSES.items()}
-
 CATEGORY_ALIASES = {
     'traffic light': 'light',
     'bike': 'bicycle',

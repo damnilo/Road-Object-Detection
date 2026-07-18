@@ -17,6 +17,24 @@ from src.training.eval import evaluate
 from src.training.logger import TrainingLogger
 from src.visualization.targets import save_augmented_target_visualizations
 
+def resolve_flat_bdd100k_layout(dataset_root):
+    labels_root = _find_first_dir(dataset_root, '100kLabels')
+    if labels_root is None:
+        raise FileNotFoundError(f"Could not find '100kLabels' directory under {dataset_root}")
+    
+    images_root = os.path.dirname(labels_root)
+
+    train_img_dir = os.path.join(images_root, 'train')
+    val_img_dir = os.path.join(images_root, 'val')
+    train_labels_dir = os.path.join(labels_root, 'train')
+    val_labels_dir = os.path.join(labels_root, 'val')
+
+    for path in (train_img_dir, val_img_dir, train_labels_dir, val_labels_dir):
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Expected path does not exist: {path}")
+        
+    return train_img_dir, val_img_dir, train_labels_dir, val_labels_dir
+
 def _find_first_dir(root, target_name, max_depth=6):
     queue = deque([(root, 0)])
 
@@ -108,13 +126,21 @@ def select_indices(total_count, sample_count, seed):
 
 def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
          visualize_targets=0, target_visualization_dir='diagnostics/targets', log_file=None,
-         use_weighted_sampling=True, dataset_root=None, kaggle_dataset=None):
+         use_weighted_sampling=True, dataset_root=None, kaggle_dataset=None,
+         checkpoint_dir=None):
     os.environ.setdefault('OMP_NUM_THREADS', str(os.cpu_count() // 2 or 1))
     os.environ.setdefault('MKL_NUM_THREADS', str(os.cpu_count() // 2 or 1))
 
     torch.set_num_threads(os.cpu_count() // 2 or 1)
     torch.set_num_interop_threads(os.cpu_count() // 2 or 1)
-    CHECKPOINT_DIR = "/content/drive/MyDrive/BDD100K_Checkpoints"
+    if checkpoint_dir is None:
+        colab_drive = "/content/drive/MyDrive/BDD100K_Checkpoints"
+        if os.path.isdir("/content/drive/MyDrive"):
+            checkpoint_dir = colab_drive
+        else:
+            checkpoint_dir = "checkpoints"
+    
+    CHECKPOINT_DIR = checkpoint_dir
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     os.makedirs('checkpoints', exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -135,7 +161,11 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
     val_dataset = None
 
     if dataset_root:
-        train_img_dir, val_img_dir, train_labels_dir, val_labels_dir = resolve_bdd100k_layout(dataset_root)
+        try:
+            train_img_dir, val_img_dir, train_labels_dir, val_labels_dir = resolve_bdd100k_layout(dataset_root)
+        except FileNotFoundError:
+            train_img_dir, val_img_dir, train_labels_dir, val_labels_dir = resolve_flat_bdd100k_layout(dataset_root)
+
         full_train = BDD100KDataset(train_img_dir, train_labels_dir, augment=not overfit_mode)
         full_val = BDD100KDataset(val_img_dir, val_labels_dir, augment=False)
 
@@ -394,8 +424,10 @@ if __name__ == '__main__':
                         help='Root directory of the BDD100K dataset. If not provided, defaults to "dataset/images/train" and "dataset/labels/train".')
     parser.add_argument('--kaggle-dataset', default=None,
                         help='Kaggle dataset identifier (e.g., "user/dataset"). If provided, the dataset will be downloaded and extracted automatically.')
+    parser.add_argument('--checkpoint-dir', default=None,
+                        help='Directory to save training checkpoints. If not provided, defaults to "checkpoints".')
     parser.set_defaults(use_weighted_sampling=True)
     args = parser.parse_args()
     main(args.epochs, args.batch_size, args.seed, args.resume, args.overfit_samples,
          args.visualize_targets, args.target_visualization_dir, args.log_file,
-         args.use_weighted_sampling, args.dataset_root, args.kaggle_dataset)
+         args.use_weighted_sampling, args.dataset_root, args.kaggle_dataset, args.checkpoint_dir)

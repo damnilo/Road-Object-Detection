@@ -20,24 +20,23 @@ class BDD100KDataset(Dataset):
         self.img_size = img_size
         self._image_index = self._build_image_index(image_dir)
 
-        with open(label_json_path, 'r') as f:
-            raw_labels = None
-            if os.path.isdir(label_json_path):
-                raw_labels = []
-                for fname in sorted(os.listdir(label_json_path)):
-                    if not fname.lower().endswith('.json'):
-                        continue
-                    full = os.path.join(label_json_path, fname)
-                    try:
-                        with open(full, 'r') as jf:
-                            entry = json.load(jf)
-                            if isinstance(entry, list):
-                                raw_labels.extend(entry)
-                            else:
-                                raw_labels.append(entry)
-                    except Exception:
-                        continue
-            else:
+        if os.path.isdir(label_json_path):
+            raw_labels = []
+            for fname in os.listdir(label_json_path):
+                if not fname.lower().endswith('.json'):
+                    continue
+                full = os.path.join(label_json_path, fname)
+                try:
+                    with open(full, 'r') as f:
+                        entry = json.load(f)
+                        if isinstance(entry, list):
+                            raw_labels.extend(entry)
+                        else:
+                            raw_labels.append(entry)
+                except Exception:
+                    continue
+        else:
+            with open(label_json_path, 'r') as f:
                 raw_labels = json.load(f)
 
         self.annotations = {}
@@ -63,7 +62,17 @@ class BDD100KDataset(Dataset):
 
         if not self.samples:
             raise ValueError("No samples found in the dataset. Please check the label JSON file and subset names.")
-        
+
+        total_boxes = sum(len(v) for v in self.annotations.values())
+        sample_preview = [(k, len(self.annotations[k])) for k in self.samples[:5]]
+        print(f"[BDD100KDataset] {len(self.samples)} samples, {total_boxes} total annotated boxes.")
+        print(f"[BDD100KDataset] First 5 samples box counts: {sample_preview}")
+        if total_boxes == 0:
+            raise RuntimeError(
+                "Dataset has 0 annotated boxes. This usually means CLASS_TO_IDX keys don't match "
+                "the category strings in the JSON. Check normalize_category() and CATEGORY_ALIASES."
+            )
+
     def __len__(self):
         return len(self.samples)
     
@@ -72,8 +81,13 @@ class BDD100KDataset(Dataset):
         index = {}
         for dirpath, _dirnames, filenames in os.walk(image_dir):
             for fname in filenames:
+                full_path = os.path.join(dirpath, fname)
                 if fname not in index:
-                    index[fname] = os.path.join(dirpath, fname)
+                    index[fname] = full_path
+                
+                stem = os.path.splitext(fname)[0]
+                if stem not in index:
+                    index[stem] = full_path
         return index
     
     def class_counts(self, indices=None, num_classes=NUM_CLASSES):
@@ -117,17 +131,17 @@ class BDD100KDataset(Dataset):
         image = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
         labels_tensor = torch.tensor(labels, dtype=torch.long)
 
+        if self.augment:
+            image, boxes_tensor, labels_tensor, _ = random_augment(
+                image, boxes_tensor, labels_tensor, None, debug=self.debug
+            )
+
         if boxes_tensor.numel() > 0:
             pixel_area = (boxes_tensor[:, 2] * self.img_size) * (boxes_tensor[:, 3] * self.img_size)
             small_object_flags = pixel_area < SMALL_OBJECT_AREA
         else:
             small_object_flags = torch.zeros((0,), dtype=torch.bool)
-        
-        if self.augment:
-            image, boxes_tensor, labels_tensor, small_object_flags = random_augment(
-                image, boxes_tensor, labels_tensor, small_object_flags, debug=self.debug
-            )
-        
+
         target = encode_multiscale_targets(
             boxes_tensor.tolist(), labels_tensor.tolist(), GRID_SIZE, FINE_GRID_SIZE, NUM_CLASSES,
             boxes_per_cell=BOXES_PER_CELL, image_size=IMG_SIZE,
