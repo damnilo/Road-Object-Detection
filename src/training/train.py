@@ -127,7 +127,7 @@ def select_indices(total_count, sample_count, seed):
 def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
          visualize_targets=0, target_visualization_dir='diagnostics/targets', log_file=None,
          use_weighted_sampling=True, dataset_root=None, kaggle_dataset=None,
-         checkpoint_dir=None):
+         checkpoint_dir=None, max_patience=7):
     os.environ.setdefault('OMP_NUM_THREADS', str(os.cpu_count() // 2 or 1))
     os.environ.setdefault('MKL_NUM_THREADS', str(os.cpu_count() // 2 or 1))
 
@@ -172,7 +172,10 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
         if overfit_mode:
             indices = select_indices(len(full_train), overfit_samples, seed)
             train_dataset = Subset(full_train, indices)
-            val_dataset = Subset(full_val, indices)
+            val_dataset = Subset(
+                BDD100KDataset(train_img_dir, train_labels_dir, augment=False),
+                indices
+            )
             class_counts = full_train.class_counts(indices=indices)
         else:
             train_dataset = full_train
@@ -281,7 +284,7 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
     model = Detector(num_classes=NUM_CLASSES).to(device)
     model = maybe_compile_model(model)
     criterion = DetectionLoss(num_classes=NUM_CLASSES, class_counts=class_counts).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.002, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.003, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=max(epochs, 1), eta_min=1e-5)
     best_map = float('-inf')
     start_epoch = 0
@@ -384,8 +387,8 @@ def main(epochs=40, batch_size=8, seed=42, resume_path=None, overfit_samples=0,
             }, os.path.join(CHECKPOINT_DIR, 'best_weights.pth'))
         else:
             patience += 1
-            if patience >= 7:
-                print("Early stopping triggered due to no improvement in mAP for 7 consecutive epochs.")
+            if patience >= max_patience:
+                print(f"Early stopping triggered due to no improvement in mAP for {max_patience} consecutive epochs.")
                 break
 
         torch.save({
@@ -426,8 +429,10 @@ if __name__ == '__main__':
                         help='Kaggle dataset identifier (e.g., "user/dataset"). If provided, the dataset will be downloaded and extracted automatically.')
     parser.add_argument('--checkpoint-dir', default=None,
                         help='Directory to save training checkpoints. If not provided, defaults to "checkpoints".')
+    parser.add_argument('--max-patience', type=int, default=7,
+                        help='Maximum number of epochs to wait for improvement in mAP before early stopping.')
     parser.set_defaults(use_weighted_sampling=True)
     args = parser.parse_args()
     main(args.epochs, args.batch_size, args.seed, args.resume, args.overfit_samples,
          args.visualize_targets, args.target_visualization_dir, args.log_file,
-         args.use_weighted_sampling, args.dataset_root, args.kaggle_dataset, args.checkpoint_dir)
+         args.use_weighted_sampling, args.dataset_root, args.kaggle_dataset, args.checkpoint_dir, args.max_patience)

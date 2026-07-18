@@ -43,7 +43,12 @@ class BDD100KDataset(Dataset):
         for entry in raw_labels:
             name = entry['name']
             boxes = []
-            for label in entry.get('labels', []):
+
+            label_list = list(entry.get('labels') or [])
+            for fram in entry.get('frames') or []:
+                label_list.extend(fram.get('objects') or []) 
+
+            for label in label_list:
                 category = normalize_category(label.get('category'))
                 if category not in CLASS_TO_IDX:
                     continue
@@ -62,16 +67,6 @@ class BDD100KDataset(Dataset):
 
         if not self.samples:
             raise ValueError("No samples found in the dataset. Please check the label JSON file and subset names.")
-
-        total_boxes = sum(len(v) for v in self.annotations.values())
-        sample_preview = [(k, len(self.annotations[k])) for k in self.samples[:5]]
-        print(f"[BDD100KDataset] {len(self.samples)} samples, {total_boxes} total annotated boxes.")
-        print(f"[BDD100KDataset] First 5 samples box counts: {sample_preview}")
-        if total_boxes == 0:
-            raise RuntimeError(
-                "Dataset has 0 annotated boxes. This usually means CLASS_TO_IDX keys don't match "
-                "the category strings in the JSON. Check normalize_category() and CATEGORY_ALIASES."
-            )
 
     def __len__(self):
         return len(self.samples)
@@ -174,7 +169,11 @@ def build_stratified_subset(label_json_path, target_size=12000, rare_categories=
     rare_names, common_names = [], []
 
     for entry in raw_labels:
-        categories_present = {label.get('category') for label in entry.get('labels', [])}
+        label_list = list(entry.get('labels') or [])
+        for fram in entry.get('frames') or []:
+            label_list.extend(fram.get('objects') or [])
+
+        categories_present = {label.get('category') for label in label_list}
         if categories_present & set(rare_categories):
             rare_names.append(entry['name'])
         else:
